@@ -1,4 +1,3 @@
-
 ####################################################################################################################################
 #         __  __                              _____   _____            __  __ _    _ _   _ _____ _____ _____ _____ _____ ____      #
 #        |  \/  |                            |  __ \ / ____|          |  \/  | |  | | \ | |_   _/ ____|_   _|  __ \_   _/ __ \     #
@@ -27,7 +26,7 @@ files.sources = list.files("Functions")
 sapply(paste0("Functions/", files.sources), source)
 
 # Instalando os pacotes faltantes e chamando junto com os já instalados
-ler_libs(c("maptools", "spdep", "cartography", "tmap", "leaflet", "dplyr", "rgdal", "RColorBrewer", "R.utils", "htmltools","htmlwidgets"))
+ler_libs(c("maptools", "spdep", "cartography", "tmap", "leaflet", "dplyr", "rgdal", "RColorBrewer", "R.utils", "htmltools","htmlwidgets", "magrittr", "sf", "osmdata", "purrr"))
 
 ###############################################################################################
 #                       _____ _                 _            /\/|                             #
@@ -45,10 +44,32 @@ Valores <- seq(0.23, 4.17, 0.01) %>% sample(size = 498, replace = TRUE)
 # Simulando os dados de localização de postos de saude(n=5), hospitais(n=3), eventos cardiovarculares(n=30), obitos(n=15)
 # random_positions(LATITUDE_1, LONGITUDE_1, LATITUDE_2, LONGITUDE_2, NUMERO_OBS)
 ps_p <- random_positions(-30.029140, -51.234022, -30.114543, -51.158496, 5)
-ps_h <- random_positions(-30.029140, -51.234022, -30.114543, -51.158496, 3)
 ps_e <- random_positions(-30.029140, -51.234022, -30.114543, -51.158496, 30)
 ps_o <- random_positions(-30.029140, -51.234022, -30.114543, -51.158496, 15)
 
+# Query no open street map dos hospitais em poa
+hospitals <- opq("porto alegre") %>%
+  add_osm_feature(key="amenity", value="hospital") %>%
+  osmdata_sf()
+
+# Arrumando acentuação no nome dos hospitais
+Encoding(hospitals$osm_polygons$name) <- "UTF-8"
+
+# Colocando os dados em um dataframe
+data <- as.data.frame(hospitals$osm_polygons) %>% 
+        select(-geometry)
+
+# Row names sequencial
+row.names(data) <- NULL
+
+# Selecionando as coordenadas dos polígonos dos hospitais e fazendo a média delas
+ss <- unlist(hospitals$osm_polygons$geometry, recursive = F) %>% 
+      map_df(~as.data.frame(.x), .id="osm_id") %>% 
+      group_by(osm_id) %>% 
+      summarise(long_media=mean(lon), lat_media=mean(lat))
+
+# Merge no banco com os dados dos hospitais com as coordenadas e substituindo NA por "Não identificado"
+datafull <- merge(data,ss) %>% mutate_at(vars(name), ~replace(., is.na(.), "Não identificado"))
 
 ###############################################################################################
 #                    _______        _                             _                           #
@@ -96,8 +117,6 @@ dados_mapa <- merge(x = shp,y = dados, by.x = "CD_GEOCMU", by.y = "Codigos")
 proj4string(dados_mapa) <- CRS("+proj=utm +datum=WGS84 +no_defs")
 
 
-
-
 #################################################################################
 #                              _____            _                               #
 #                             |  __ \          (_)                              #
@@ -130,6 +149,12 @@ obito_popup <- paste0("<strong>Idade: </strong>",
                       "<br><strong>Causa: (</strong>",
                       
                       cid$COD, "<strong>) </strong>", cid$CAUSA , "<strong>.</strong>")
+# Pop-up informativo do hospital
+hosp_popup <- paste0("<strong>ID: </strong>", 
+                      datafull$osm_id,
+                      "<br><strong>Nome: </strong>",
+                      datafull$name)
+
 
 ######################################################################################
 #                                __  __                                              #                          
@@ -151,7 +176,7 @@ mapa_sca <- leaflet(data = dados_mapa) %>%
               popup = municipio_popup) %>%
   addMarkers(lng = ~ps_p$LONG, lat = ~ps_p$LAT, icon = p_ico, 
              label="Posto de Saúde", clusterOptions = markerClusterOptions()) %>%
-  addMarkers(lng = ~ps_h$LONG, lat = ~ps_h$LAT, icon = h_ico, 
+  addMarkers(lng = ~datafull$long_media, lat = ~datafull$lat_media, popup = hosp_popup, icon = h_ico, 
              label="Hospital", clusterOptions = markerClusterOptions()) %>%
   addMarkers(lng = ~ps_e$LONG, lat = ~ps_e$LAT, icon = e_ico,
              label="Participante com doença cardíaca", clusterOptions = markerClusterOptions()) %>%
